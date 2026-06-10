@@ -22,7 +22,7 @@ pipeline {
             }
         }
 
-        stage('build docker image image') {
+        stage('build docker image') {
             steps {
                 script {
                     if (fileExists('PollApi')) {
@@ -50,6 +50,7 @@ pipeline {
         stage('start mysql') {
             steps {
                 script {
+                    // Notice: No -p 3306:3306 here. This prevents the port binding error.
                     sh """
                         docker rm -f ${MYSQL_CONTAINER} || true
                         docker run -d \
@@ -57,7 +58,6 @@ pipeline {
                             --network ${NETWORK_NAME} \
                             -e MYSQL_ROOT_PASSWORD=root \
                             -e MYSQL_DATABASE=fifa_db \
-                            -p 3306:3306 \
                             mysql:8.0
                     """
                 }
