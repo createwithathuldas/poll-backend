@@ -27,6 +27,9 @@ namespace PollApi.Hubs
 
             // Per-user group → for targeted kick / notification delivery
             await Groups.AddToGroupAsync(Context.ConnectionId, $"user-{userId}");
+            
+            // Add to global chat group
+            await Groups.AddToGroupAsync(Context.ConnectionId, "global-chat");
 
             if (role == "Admin")
                 await Groups.AddToGroupAsync(Context.ConnectionId, "admins");
