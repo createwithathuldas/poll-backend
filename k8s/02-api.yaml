@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: poll-api-secret
+type: Opaque
+stringData:
+  connection-string: "Server=poll-mysql;Port=3306;Database=fifa_db;User=root;Password=rootpassword;"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: poll-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: poll-api
+  template:
+    metadata:
+      labels:
+        app: poll-api
+    spec:
+      containers:
+        - name: poll-api
+          image: <ACR_NAME>.azurecr.io/poll-api:latest
+          env:
+            - name: ConnectionStrings__Default
+              valueFrom:
+                secretKeyRef:
+                  name: poll-api-secret
+                  key: connection-string
+          ports:
+            - containerPort: 5298
+          readinessProbe:
+            httpGet:
+              path: /api/polls/categories
+              port: 5298
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: poll-api
+spec:
+  selector:
+    app: poll-api
+  ports:
+    - port: 5298
+      targetPort: 5298
+

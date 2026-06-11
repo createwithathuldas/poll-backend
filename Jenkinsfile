@@ -1,108 +1,50 @@
 pipeline {
     agent any
-
     environment {
-        DOCKER_IMAGE = 'poll-api:latest'
-        NETWORK_NAME = 'poll-network'
-        MYSQL_CONTAINER = 'mysql-db'
-        API_CONTAINER = 'poll-api-container'
+        ACR     = 'athulpollacr'
+        RG      = 'poll-app-rg'
+        AKS     = 'poll-app-aks'
+        IMAGE   = 'poll-api'
+        AZ_CLIENT_ID     = credentials('azure-client-id')
+        AZ_CLIENT_SECRET = credentials('azure-client-secret')
+        AZ_TENANT_ID     = credentials('azure-tenant-id')
     }
-
     stages {
-        stage('checkout scm') {
+        stage('Checkout') {
+            steps { checkout scm }
+        }
+        stage('Build image') {
             steps {
-                checkout scm
+                bat 'docker build --platform linux/amd64 -t %ACR%.azurecr.io/%IMAGE%:%BUILD_NUMBER% -t %ACR%.azurecr.io/%IMAGE%:latest .'
             }
         }
-
-        stage('checkout') {
+        stage('Login to Azure') {
             steps {
-                echo 'Verifying workspace paths...'
-                sh 'ls -la'
+                bat 'az login --service-principal -u %AZ_CLIENT_ID% -p %AZ_CLIENT_SECRET% --tenant %AZ_TENANT_ID%'
+                bat 'az acr login -n %ACR%'
             }
         }
-
-        stage('build docker image') {
+        stage('Push to ACR') {
             steps {
-                script {
-                    if (fileExists('PollApi')) {
-                        dir('PollApi') {
-                            sh "docker build -t ${DOCKER_IMAGE} ."
-                        }
-                    } else {
-                        sh "docker build -t ${DOCKER_IMAGE} ."
-                    }
-                }
+                bat 'docker push %ACR%.azurecr.io/%IMAGE%:%BUILD_NUMBER%'
+                bat 'docker push %ACR%.azurecr.io/%IMAGE%:latest'
             }
         }
-
-        stage('create network') {
+        stage('Deploy to AKS') {
             steps {
-                script {
-                    sh """
-                        docker network inspect ${NETWORK_NAME} >/dev/null 2>&1 || \
-                        docker network create ${NETWORK_NAME}
-                    """
-                }
-            }
-        }
-
-        stage('start mysql') {
-            steps {
-                script {
-                    // Notice: No -p 3306:3306 here. This prevents the port binding error.
-                    sh """
-                        docker rm -f ${MYSQL_CONTAINER} || true
-                        docker run -d \
-                            --name ${MYSQL_CONTAINER} \
-                            --network ${NETWORK_NAME} \
-                            -e MYSQL_ROOT_PASSWORD=root \
-                            -e MYSQL_DATABASE=fifa_db \
-                            mysql:8.0
-                    """
-                }
-            }
-        }
-
-        stage('mysql health check') {
-            steps {
-                script {
-                    echo 'Waiting for MySQL database to become healthy...'
-                    sh """
-                        timeout=60
-                        while [ \$timeout -gt 0 ]; do
-                            if docker exec ${MYSQL_CONTAINER} mysqladmin ping -uroot -proot --silent; then
-                                echo 'MySQL is up and running!'
-                                break
-                            fi
-                            echo 'Waiting for MySQL...'
-                            sleep 2
-                            timeout=\$((\$timeout - 2))
-                        done
-                        if [ \$timeout -le 0 ]; then
-                            echo 'MySQL health check failed!'
-                            exit 1
-                        fi
-                    """
-                }
-            }
-        }
-
-        stage('run Api') {
-            steps {
-                script {
-                    sh "docker rm -f ${API_CONTAINER} || true"
-                    sh """
-                        docker run -d \
-                            --name ${API_CONTAINER} \
-                            --network ${NETWORK_NAME} \
-                            -p 5298:5298 \
-                            -e ConnectionStrings__Default="Server=${MYSQL_CONTAINER};Port=3306;Database=fifa_db;User=root;Password=root;" \
-                            -e ASPNETCORE_ENVIRONMENT=Development \
-                            ${DOCKER_IMAGE}
-                    """
-                }
+                bat 'az aks get-credentials -n %AKS% -g %RG% --overwrite-existing'
+                powershell '(Get-Content k8s/02-api.yaml) -replace "<ACR_NAME>", $env:ACR | Set-Content $env:TEMP\\02-api.yaml'
+                bat 'kubectl apply -f k8s/01-mysql.yaml'
+                bat 'kubectl apply -f %TEMP%\\02-api.yaml'
+                bat 'kubectl set image deployment/poll-api poll-api=%ACR%.azurecr.io/%IMAGE%:%BUILD_NUMBER%'
+                bat 'kubectl rollout status deployment/poll-api --timeout=120s'
             }
         }
     }
+    post {
+        success { echo "poll-api ${BUILD_NUMBER} deployed to AKS." }
+        failure { echo 'poll-api pipeline failed.' }
+        always  { bat 'az logout || exit 0' }
+    }
+
 }
